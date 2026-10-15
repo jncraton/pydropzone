@@ -220,6 +220,7 @@
         const pyodide = await getPyodide()
         if (runId !== activeRun) return
 
+        outputScreen.value = ""
         pyodide.globals.set("_emit", text => appendOutput(String(text), runId))
         pyodide.globals.set("_read_line", readLine)
 
