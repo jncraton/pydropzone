@@ -40,6 +40,10 @@
       cursor: text;
     }
 
+    textarea[hidden] {
+      display: none;
+    }
+
     .control {
       position: fixed;
       right: 1rem;
@@ -51,24 +55,19 @@
       color: #fff;
       font: inherit;
       font-size: 0.85rem;
-      text-decoration: none;
       cursor: pointer;
-    }
-
-    .control[hidden] {
-      display: none;
     }
   </style>
 </head>
 <body>
-  <textarea id="screen" spellcheck="false" aria-label="Python source or program output"></textarea>
-  <button id="view-source" class="control" type="button" hidden>View Source</button>
-  <a id="run" class="control" href="#" hidden>Run</a>
+  <textarea id="source-screen" spellcheck="false" aria-label="Python source code"></textarea>
+  <textarea id="output-screen" spellcheck="false" aria-label="Program output and input" hidden readonly></textarea>
+  <button id="mode-toggle" class="control" type="button">Run</button>
 
   <script>
-    const screen = document.getElementById("screen")
-    const viewSourceButton = document.getElementById("view-source")
-    const runLink = document.getElementById("run")
+    const sourceScreen = document.getElementById("source-screen")
+    const outputScreen = document.getElementById("output-screen")
+    const modeToggle = document.getElementById("mode-toggle")
 
     let source = ""
     let mode = "source"
@@ -83,17 +82,14 @@
     function setMode(nextMode) {
       mode = nextMode
       const sourceMode = mode === "source"
-      screen.readOnly = !sourceMode && !waitingForInput
-      viewSourceButton.hidden = sourceMode
-      runLink.hidden = !sourceMode
-      screen.setAttribute(
-        "aria-label",
-        sourceMode ? "Python source code" : "Program output and input"
-      )
+
+      sourceScreen.hidden = !sourceMode
+      outputScreen.hidden = sourceMode
+      modeToggle.textContent = sourceMode ? "Run" : "View Source"
 
       if (sourceMode) {
-        screen.value = source
-        screen.focus()
+        sourceScreen.value = source
+        sourceScreen.focus()
       }
     }
 
@@ -152,8 +148,8 @@
 
     function appendOutput(text, runId) {
       if (runId !== activeRun) return
-      screen.value += text
-      screen.scrollTop = screen.scrollHeight
+      outputScreen.value += text
+      outputScreen.scrollTop = outputScreen.scrollHeight
     }
 
     function cancelPendingInput() {
@@ -161,17 +157,17 @@
         const resolve = pendingInput
         pendingInput = null
         waitingForInput = false
-        screen.readOnly = true
+        outputScreen.readOnly = true
         resolve("")
       }
     }
 
     function readLine() {
       waitingForInput = true
-      inputPrefix = screen.value
-      screen.readOnly = false
-      screen.focus()
-      screen.selectionStart = screen.selectionEnd = screen.value.length
+      inputPrefix = outputScreen.value
+      outputScreen.readOnly = false
+      outputScreen.focus()
+      outputScreen.selectionStart = outputScreen.selectionEnd = outputScreen.value.length
 
       return new Promise(resolve => {
         pendingInput = resolve
@@ -217,8 +213,8 @@
     async function executeProgram(runId, programSource) {
       if (runId !== activeRun) return
 
-      screen.value = "Loading Pyodide...\n"
-      screen.readOnly = true
+      outputScreen.value = "Loading Pyodide...\n"
+      outputScreen.readOnly = true
 
       try {
         const pyodide = await getPyodide()
@@ -234,18 +230,19 @@
         if (runId === activeRun) {
           waitingForInput = false
           pendingInput = null
-          screen.readOnly = true
-          screen.scrollTop = screen.scrollHeight
+          outputScreen.readOnly = true
+          outputScreen.scrollTop = outputScreen.scrollHeight
         }
       }
     }
 
     async function runProgram() {
-      source = mode === "source" ? screen.value : source
+      source = sourceScreen.value
       await updateHash(source)
 
       cancelPendingInput()
       const runId = ++activeRun
+      outputScreen.value = ""
       setMode("run")
 
       runQueue = runQueue
@@ -255,36 +252,36 @@
       return runQueue
     }
 
-    screen.addEventListener("input", () => {
-      if (mode === "source") {
-        source = screen.value
-        updateHash(source).catch(() => {})
-        return
-      }
+    sourceScreen.addEventListener("input", () => {
+      if (mode !== "source") return
+      source = sourceScreen.value
+      updateHash(source).catch(() => {})
+    })
 
+    outputScreen.addEventListener("input", () => {
       if (!waitingForInput) return
 
-      if (!screen.value.startsWith(inputPrefix)) {
-        screen.value = inputPrefix
+      if (!outputScreen.value.startsWith(inputPrefix)) {
+        outputScreen.value = inputPrefix
       } else {
-        const entered = screen.value.slice(inputPrefix.length)
+        const entered = outputScreen.value.slice(inputPrefix.length)
         if (/[\r\n]/.test(entered)) {
-          screen.value = inputPrefix + entered.replace(/[\r\n]/g, "")
+          outputScreen.value = inputPrefix + entered.replace(/[\r\n]/g, "")
         }
       }
 
-      screen.selectionStart = screen.selectionEnd = screen.value.length
+      outputScreen.selectionStart = outputScreen.selectionEnd = outputScreen.value.length
     })
 
-    screen.addEventListener("keydown", event => {
+    outputScreen.addEventListener("keydown", event => {
       if (mode !== "run" || !waitingForInput) return
 
       if (event.key === "Enter") {
         event.preventDefault()
-        const line = screen.value.slice(inputPrefix.length).replace(/[\r\n]/g, "")
-        screen.value = inputPrefix + line + "\n"
-        screen.scrollTop = screen.scrollHeight
-        screen.readOnly = true
+        const line = outputScreen.value.slice(inputPrefix.length).replace(/[\r\n]/g, "")
+        outputScreen.value = inputPrefix + line + "\n"
+        outputScreen.scrollTop = outputScreen.scrollHeight
+        outputScreen.readOnly = true
         waitingForInput = false
 
         const resolve = pendingInput
@@ -293,16 +290,15 @@
       }
     })
 
-    viewSourceButton.addEventListener("click", () => {
+    modeToggle.addEventListener("click", () => {
+      if (mode === "source") {
+        runProgram()
+        return
+      }
+
       cancelPendingInput()
       activeRun++
-      source = mode === "source" ? screen.value : source
       setMode("source")
-    })
-
-    runLink.addEventListener("click", event => {
-      event.preventDefault()
-      runProgram()
     })
 
     async function start() {
@@ -316,10 +312,11 @@
 
       try {
         source = await decodeSource(fragment)
+        sourceScreen.value = source
         await runProgram()
       } catch {
         source = ""
-        screen.placeholder = "The URL fragment could not be decoded. Enter Python source here."
+        sourceScreen.placeholder = "The URL fragment could not be decoded. Enter Python source here."
         setMode("source")
       }
     }
