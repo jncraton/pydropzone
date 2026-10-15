@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Python CLI</title>
+  <script src="https://cdn.jsdelivr.net/pyodide/v314.0.7/full/pyodide.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      background: #111;
+      color: #eee;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+
+    textarea {
+      display: block;
+      width: 100%;
+      height: 100%;
+      padding: 1rem 1rem 4rem;
+      border: 0;
+      outline: 0;
+      resize: none;
+      background: #111;
+      color: #eee;
+      font: inherit;
+      font-size: 1rem;
+      line-height: 1.5;
+      tab-size: 4;
+    }
+
+    textarea[readonly] {
+      cursor: text;
+    }
+
+    .control {
+      position: fixed;
+      right: 1rem;
+      bottom: 1rem;
+      padding: 0.45rem 0.7rem;
+      border: 1px solid #777;
+      border-radius: 4px;
+      background: #222;
+      color: #fff;
+      font: inherit;
+      font-size: 0.85rem;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    .control[hidden] {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <textarea id="screen" spellcheck="false" aria-label="Python source or program output"></textarea>
+  <button id="view-source" class="control" type="button" hidden>View Source</button>
+  <a id="run" class="control" href="#" hidden>Run</a>
+
+  <script>
+    const screen = document.getElementById("screen")
+    const viewSourceButton = document.getElementById("view-source")
+    const runLink = document.getElementById("run")
+
+    let source = ""
+    let mode = "source"
+    let pyodidePromise
+    let activeRun = 0
+    let runQueue = Promise.resolve()
+    let waitingForInput = false
+    let inputPrefix = ""
+    let pendingInput = null
+    let hashWrite = 0
+
+    function setMode(nextMode) {
+      mode = nextMode
+      const sourceMode = mode === "source"
+      screen.readOnly = !sourceMode && !waitingForInput
+      viewSourceButton.hidden = sourceMode
+      runLink.hidden = !sourceMode
+      screen.setAttribute(
+        "aria-label",
+        sourceMode ? "Python source code" : "Program output and input"
+      )
+
+      if (sourceMode) {
+        screen.value = source
+        screen.focus()
+      }
+    }
+
+    function bytesToBase64(bytes) {
+      let binary = ""
+      const chunkSize = 0x8000
+
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize))
+      }
+
+      return btoa(binary)
+    }
+
+    function base64ToBytes(value) {
+      const binary = atob(value)
+      const bytes = new Uint8Array(binary.length)
+
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i)
+      }
+
+      return bytes
+    }
+
+    async function encodeSource(text) {
+      const input = new Blob([new TextEncoder().encode(text)]).stream()
+      const compressed = input.pipeThrough(new CompressionStream("deflate-raw"))
+      const bytes = new Uint8Array(await new Response(compressed).arrayBuffer())
+
+      return bytesToBase64(bytes)
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/g, "")
+    }
+
+    async function decodeSource(value) {
+      const base64 = value.replace(/-/g, "+").replace(/_/g, "/")
+      const padded = base64 + "=".repeat((4 - base64.length % 4) % 4)
+      const compressed = base64ToBytes(padded)
+      const input = new Blob([compressed]).stream()
+      const decompressed = input.pipeThrough(new DecompressionStream("deflate-raw"))
+      const bytes = await new Response(decompressed).arrayBuffer()
+
+      return new TextDecoder().decode(bytes)
+    }
+
+    async function updateHash(text) {
+      const version = ++hashWrite
+      const encoded = await encodeSource(text)
+
+      if (version === hashWrite) {
+        history.replaceState(null, "", location.href.split("#")[0] + "#" + encoded)
+      }
+    }
+
+    function appendOutput(text, runId) {
+      if (runId !== activeRun) return
+      screen.value += text
+      screen.scrollTop = screen.scrollHeight
+    }
+
+    function cancelPendingInput() {
+      if (pendingInput) {
+        const resolve = pendingInput
+        pendingInput = null
+        waitingForInput = false
+        screen.readOnly = true
+        resolve("")
+      }
+    }
+
+    function readLine() {
+      waitingForInput = true
+      inputPrefix = screen.value
+      screen.readOnly = false
+      screen.focus()
+      screen.selectionStart = screen.selectionEnd = screen.value.length
+
+      return new Promise(resolve => {
+        pendingInput = resolve
+      })
+    }
+
+    function getPyodide() {
+      if (!pyodidePromise) {
+        pyodidePromise = loadPyodide({
+          indexURL: "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/"
+        })
+      }
+
+      return pyodidePromise
+    }
+
+    function makeProgram(text) {
+      const adapted = text.replace(/\binput\s*\(/g, "await input(")
+      const body = adapted
+        .split("\n")
+        .map(line => "    " + line)
+        .join("\n")
+
+      return [
+        "import sys",
+        "class _ConsoleOutput:",
+        "    def write(self, value):",
+        "        _emit(str(value))",
+        "        return len(value)",
+        "    def flush(self):",
+        "        pass",
+        "sys.stdout = _ConsoleOutput()",
+        "sys.stderr = sys.stdout",
+        "async def input(prompt=''):",
+        "    _emit(str(prompt))",
+        "    return await _read_line()",
+        "async def _user_main():",
+        body || "    pass",
+        "await _user_main()"
+      ].join("\n")
+    }
+
+    async function executeProgram(runId, programSource) {
+      if (runId !== activeRun) return
+
+      screen.value = "Loading Pyodide...\n"
+      screen.readOnly = true
+
+      try {
+        const pyodide = await getPyodide()
+        if (runId !== activeRun) return
+
+        pyodide.globals.set("_emit", text => appendOutput(String(text), runId))
+        pyodide.globals.set("_read_line", readLine)
+
+        await pyodide.runPythonAsync(makeProgram(programSource))
+      } catch (error) {
+        appendOutput(String(error) + "\n", runId)
+      } finally {
+        if (runId === activeRun) {
+          waitingForInput = false
+          pendingInput = null
+          screen.readOnly = true
+          screen.scrollTop = screen.scrollHeight
+        }
+      }
+    }
+
+    async function runProgram() {
+      source = mode === "source" ? screen.value : source
+      await updateHash(source)
+
+      cancelPendingInput()
+      const runId = ++activeRun
+      setMode("run")
+
+      runQueue = runQueue
+        .then(() => executeProgram(runId, source))
+        .catch(error => appendOutput(String(error) + "\n", runId))
+
+      return runQueue
+    }
+
+    screen.addEventListener("input", () => {
+      if (mode === "source") {
+        source = screen.value
+        updateHash(source).catch(() => {})
+        return
+      }
+
+      if (!waitingForInput) return
+
+      if (!screen.value.startsWith(inputPrefix)) {
+        screen.value = inputPrefix
+      } else {
+        const entered = screen.value.slice(inputPrefix.length)
+        if (/[\r\n]/.test(entered)) {
+          screen.value = inputPrefix + entered.replace(/[\r\n]/g, "")
+        }
+      }
+
+      screen.selectionStart = screen.selectionEnd = screen.value.length
+    })
+
+    screen.addEventListener("keydown", event => {
+      if (mode !== "run" || !waitingForInput) return
+
+      if (event.key === "Enter") {
+        event.preventDefault()
+        const line = screen.value.slice(inputPrefix.length).replace(/[\r\n]/g, "")
+        screen.value = inputPrefix + line + "\n"
+        screen.scrollTop = screen.scrollHeight
+        screen.readOnly = true
+        waitingForInput = false
+
+        const resolve = pendingInput
+        pendingInput = null
+        if (resolve) resolve(line)
+      }
+    })
+
+    viewSourceButton.addEventListener("click", () => {
+      cancelPendingInput()
+      activeRun++
+      source = mode === "source" ? screen.value : source
+      setMode("source")
+    })
+
+    runLink.addEventListener("click", event => {
+      event.preventDefault()
+      runProgram()
+    })
+
+    async function start() {
+      const fragment = location.hash.slice(1)
+
+      if (!fragment) {
+        source = ""
+        setMode("source")
+        return
+      }
+
+      try {
+        source = await decodeSource(fragment)
+        await runProgram()
+      } catch {
+        source = ""
+        screen.placeholder = "The URL fragment could not be decoded. Enter Python source here."
+        setMode("source")
+      }
+    }
+
+    start()
+  </script>
+</body>
+</html>
