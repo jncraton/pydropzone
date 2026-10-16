@@ -199,11 +199,12 @@
       }
 
       function makeProgram(text) {
-        const adapted = text.replace(/\binput\s*\(/g, 'await input(')
+        const adapted = text.replace(/\binput\s*\(/g, '(await input(')
         const body = adapted
           .split('\n')
           .map(line => '    ' + line)
           .join('\n')
+          .replace(/\(await input\(([^()\n]*)\)/g, '(await input($1))')
 
         return [
           'import sys',
