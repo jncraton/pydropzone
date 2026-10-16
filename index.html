@@ -9,16 +9,12 @@
         color-scheme: light dark;
         --bg: #fff;
         --fg: #111;
-        --control-bg: #eee;
-        --control-border: #888;
       }
 
       @media (prefers-color-scheme: dark) {
         :root {
           --bg: #000;
           --fg: #eee;
-          --control-bg: #222;
-          --control-border: #777;
         }
       }
 
@@ -59,25 +55,23 @@
         display: none;
       }
 
-      .control {
+      #mode-toggle {
         position: fixed;
         right: 1rem;
         bottom: 1rem;
-        padding: 0.45rem 0.7rem;
-        border: 1px solid var(--control-border);
+        padding: 0.4rem;
+        border: 1px solid var(--fg);
         border-radius: 4px;
-        background: var(--control-bg);
+        background-color: var(--bg);
         color: var(--fg);
         font: inherit;
-        font-size: 0.85rem;
-        cursor: pointer;
       }
     </style>
   </head>
   <body>
     <textarea id="source-screen" spellcheck="false" aria-label="Python source code"></textarea>
     <textarea id="output-screen" spellcheck="false" aria-label="Program output and input" hidden readonly></textarea>
-    <button id="mode-toggle" class="control" type="button">Run</button>
+    <button id="mode-toggle">Run</button>
 
     <script>
       const sourceScreen = document.getElementById('source-screen')
