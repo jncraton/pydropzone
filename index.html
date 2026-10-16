@@ -226,11 +226,7 @@
           }
 
           if (type === 'finished' || type === 'error') {
-            waitingForInput = false
-            outputScreen.readOnly = true
-            outputScreen.scrollTop = outputScreen.scrollHeight
-            worker.terminate()
-            worker = null
+            stopWorker()
           }
         }
 
