@@ -79,7 +79,7 @@
       const modeToggle = document.getElementById('mode-toggle')
 
       let mode = 'source'
-      let worker = null
+      let worker
       let waitingForInput = false
       let inputPrefix = ''
       let hashWrite = 0
@@ -147,10 +147,8 @@
       }
 
       function stopWorker() {
-        if (worker) {
-          worker.terminate()
-          worker = null
-        }
+        worker?.terminate()
+        worker = undefined
 
         waitingForInput = false
         inputPrefix = ''
