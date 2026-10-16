@@ -86,13 +86,12 @@
 
       function setMode(nextMode) {
         mode = nextMode
-        const sourceMode = mode === 'source'
 
-        sourceScreen.hidden = !sourceMode
-        outputScreen.hidden = sourceMode
-        modeToggle.textContent = sourceMode ? 'Run' : 'View Source'
+        sourceScreen.hidden = mode != 'source'
+        outputScreen.hidden = mode == 'source'
+        modeToggle.textContent = mode == 'source' ? 'Run' : 'View Source'
 
-        if (sourceMode) {
+        if (mode == 'source') {
           sourceScreen.focus()
         }
       }
