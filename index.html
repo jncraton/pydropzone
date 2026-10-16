@@ -6,8 +6,21 @@
     <title>Python CLI</title>
     <script src="https://cdn.jsdelivr.net/pyodide/v314.0.7/full/pyodide.js"></script>
     <style>
-      * {
-        box-sizing: border-box;
+      :root {
+        color-scheme: light dark;
+        --bg: #fff;
+        --fg: #111;
+        --control-bg: #eee;
+        --control-border: #888;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #111;
+          --fg: #eee;
+          --control-bg: #222;
+          --control-border: #777;
+        }
       }
 
       html,
@@ -15,8 +28,8 @@
         width: 100%;
         height: 100%;
         margin: 0;
-        background: #111;
-        color: #eee;
+        background: var(--bg);
+        color: var(--fg);
         font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
       }
 
@@ -29,12 +42,13 @@
         outline: 0;
         margin: 0;
         resize: none;
-        background: #111;
-        color: #eee;
+        background: var(--bg);
+        color: var(--fg);
         font: inherit;
         font-size: 1rem;
         line-height: 1.5;
         tab-size: 4;
+        box-sizing: border-box;
       }
 
       textarea[readonly] {
@@ -50,10 +64,10 @@
         right: 1rem;
         bottom: 1rem;
         padding: 0.45rem 0.7rem;
-        border: 1px solid #777;
+        border: 1px solid var(--control-border);
         border-radius: 4px;
-        background: #222;
-        color: #fff;
+        background: var(--control-bg);
+        color: var(--fg);
         font: inherit;
         font-size: 0.85rem;
         cursor: pointer;
