@@ -28,6 +28,8 @@ self.onmessage = async event => {
   try {
     const pyodide = await getPyodide()
 
+    self.postMessage({ type: 'ready' })
+
     pyodide.globals.set('_emit', value => {
       self.postMessage({ type: 'output', text: String(value) })
     })

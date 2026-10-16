@@ -213,6 +213,11 @@
 
           const { type, text } = event.data
 
+          if (type === 'ready') {
+            outputScreen.value = ''
+            return
+          }
+
           if (type === 'output') {
             outputScreen.value += text
             outputScreen.scrollTop = outputScreen.scrollHeight
