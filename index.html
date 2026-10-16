@@ -18,13 +18,16 @@
         }
       }
 
+      * {
+        box-sizing: border-box;
+      }
+
       body {
         width: 100%;
         max-width: 960px;
         height: 100vh;
         margin: 0 auto;
         padding: 0.5em;
-        box-sizing: border-box;
         background: var(--bg);
         color: var(--fg);
         font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
@@ -44,7 +47,6 @@
         color: var(--fg);
         font: inherit;
         line-height: 1.7;
-        box-sizing: border-box;
         min-height: 0;
         flex: 1;
       }
