@@ -28,7 +28,8 @@
         font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
       }
 
-      textarea {
+      textarea,
+      #output-screen {
         display: block;
         max-width: 960px;
         width: 100%;
@@ -37,22 +38,38 @@
         border: 0;
         outline: 0;
         margin: 0 auto;
-        resize: none;
         background: var(--bg);
         color: var(--fg);
         font: inherit;
         font-size: 1rem;
         line-height: 1.5;
-        tab-size: 4;
         box-sizing: border-box;
       }
 
-      textarea[readonly] {
-        cursor: text;
+      textarea {
+        resize: none;
+        tab-size: 4;
       }
 
+      #output-screen {
+        overflow: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
+      #output-screen[hidden],
       textarea[hidden] {
         display: none;
+      }
+
+      #input-line {
+        width: min(100%, 40rem);
+        border: 0;
+        outline: 0;
+        padding: 0;
+        background: transparent;
+        color: inherit;
+        font: inherit;
       }
 
       #mode-toggle {
@@ -70,7 +87,7 @@
   </head>
   <body>
     <textarea id="source-screen" spellcheck="false" aria-label="Python source code"></textarea>
-    <textarea id="output-screen" spellcheck="false" aria-label="Program output and input" hidden readonly></textarea>
+    <pre id="output-screen" aria-label="Program output" hidden></pre>
     <button id="mode-toggle">Run</button>
 
     <script>
@@ -80,20 +97,21 @@
 
       let mode = 'source'
       let worker
-      let waitingForInput = false
-      let inputPrefix = ''
+      let inputLine
       let hashWrite = 0
 
       function setMode(nextMode) {
         mode = nextMode
+        sourceScreen.hidden = mode !== 'source'
+        outputScreen.hidden = mode === 'source'
+        modeToggle.textContent = mode === 'source' ? 'Run' : 'View Source'
 
-        sourceScreen.hidden = mode != 'source'
-        outputScreen.hidden = mode == 'source'
-        modeToggle.textContent = mode == 'source' ? 'Run' : 'View Source'
+        if (mode === 'source') sourceScreen.focus()
+      }
 
-        if (mode == 'source') {
-          sourceScreen.focus()
-        }
+      function appendOutput(text) {
+        outputScreen.append(document.createTextNode(text))
+        outputScreen.scrollTop = outputScreen.scrollHeight
       }
 
       function bytesToBase64(bytes) {
@@ -149,10 +167,8 @@
       function stopWorker() {
         worker?.terminate()
         worker = undefined
-
-        waitingForInput = false
-        inputPrefix = ''
-        outputScreen.readOnly = true
+        inputLine?.remove()
+        inputLine = undefined
       }
 
       function makeProgram(text) {
@@ -182,17 +198,40 @@
         ].join('\n')
       }
 
+      function requestInput() {
+        inputLine?.remove()
+
+        inputLine = document.createElement('input')
+        inputLine.id = 'input-line'
+        inputLine.type = 'text'
+        inputLine.autocomplete = 'off'
+        inputLine.setAttribute('aria-label', 'Program input')
+        outputScreen.append(inputLine)
+        inputLine.focus()
+
+        inputLine.addEventListener('keydown', event => {
+          if (event.key !== 'Enter' || !worker) return
+
+          event.preventDefault()
+          const value = inputLine.value
+          inputLine.remove()
+          inputLine = undefined
+
+          appendOutput(value + '\n')
+          worker.postMessage({ type: 'input-response', text: value })
+        })
+      }
+
       function runProgram() {
         updateHash(sourceScreen.value).catch(() => {})
-
         stopWorker()
-        outputScreen.value = 'Loading...'
+        outputScreen.replaceChildren(document.createTextNode('Loading...\n'))
         setMode('run')
 
         try {
           worker = new Worker('./python-worker.mjs', { type: 'module' })
         } catch (error) {
-          outputScreen.value = String(error) + '\n'
+          appendOutput(String(error) + '\n')
           return
         }
 
@@ -202,36 +241,21 @@
           const { type, text } = event.data
 
           if (type === 'ready') {
-            outputScreen.value = ''
-            return
-          }
-
-          if (type === 'output') {
-            outputScreen.value += text
-            outputScreen.scrollTop = outputScreen.scrollHeight
-            return
-          }
-
-          if (type === 'input-request') {
-            waitingForInput = true
-            inputPrefix = outputScreen.value
-            outputScreen.readOnly = false
-            outputScreen.focus()
-            outputScreen.selectionStart = outputScreen.selectionEnd = outputScreen.value.length
-            return
-          }
-
-          if (type === 'error') {
-            outputScreen.value += text + '\n'
-          }
-
-          if (type === 'finished' || type === 'error') {
+            outputScreen.replaceChildren()
+          } else if (type === 'output') {
+            appendOutput(text)
+          } else if (type === 'input-request') {
+            requestInput()
+          } else if (type === 'error') {
+            appendOutput(text + '\n')
+            stopWorker()
+          } else if (type === 'finished') {
             stopWorker()
           }
         }
 
         worker.onerror = event => {
-          outputScreen.value += event.message + '\n'
+          appendOutput(event.message + '\n')
           stopWorker()
         }
 
@@ -242,52 +266,16 @@
       }
 
       sourceScreen.addEventListener('input', () => {
-        if (mode !== 'source') return
-        updateHash(sourceScreen.value).catch(() => {})
-      })
-
-      outputScreen.addEventListener('input', () => {
-        if (!waitingForInput) return
-
-        if (!outputScreen.value.startsWith(inputPrefix)) {
-          outputScreen.value = inputPrefix
-        } else {
-          const entered = outputScreen.value.slice(inputPrefix.length)
-          if (/[\r\n]/.test(entered)) {
-            outputScreen.value = inputPrefix + entered.replace(/[\r\n]/g, '')
-          }
-        }
-
-        outputScreen.selectionStart = outputScreen.selectionEnd = outputScreen.value.length
-      })
-
-      outputScreen.addEventListener('keydown', event => {
-        if (mode !== 'run' || !waitingForInput) return
-
-        if (event.key === 'Enter') {
-          event.preventDefault()
-
-          const line = outputScreen.value.slice(inputPrefix.length).replace(/[\r\n]/g, '')
-
-          outputScreen.value = inputPrefix + line + '\n'
-          outputScreen.scrollTop = outputScreen.scrollHeight
-          outputScreen.readOnly = true
-          waitingForInput = false
-
-          if (worker) {
-            worker.postMessage({ type: 'input-response', text: line })
-          }
-        }
+        if (mode === 'source') updateHash(sourceScreen.value).catch(() => {})
       })
 
       modeToggle.addEventListener('click', () => {
         if (mode === 'source') {
           runProgram()
-          return
+        } else {
+          stopWorker()
+          setMode('source')
         }
-
-        stopWorker()
-        setMode('source')
       })
 
       async function start() {
