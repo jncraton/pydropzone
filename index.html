@@ -4,7 +4,6 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Python CLI</title>
-    <script src="https://cdn.jsdelivr.net/pyodide/v314.0.7/full/pyodide.js"></script>
     <style>
       :root {
         color-scheme: light dark;
@@ -88,12 +87,9 @@
 
       let source = ''
       let mode = 'source'
-      let pyodidePromise
-      let activeRun = 0
-      let runQueue = Promise.resolve()
+      let worker = null
       let waitingForInput = false
       let inputPrefix = ''
-      let pendingInput = null
       let hashWrite = 0
 
       function setMode(nextMode) {
@@ -160,42 +156,15 @@
         }
       }
 
-      function appendOutput(text, runId) {
-        if (runId !== activeRun) return
-        outputScreen.value += text
-        outputScreen.scrollTop = outputScreen.scrollHeight
-      }
-
-      function cancelPendingInput() {
-        if (pendingInput) {
-          const resolve = pendingInput
-          pendingInput = null
-          waitingForInput = false
-          outputScreen.readOnly = true
-          resolve('')
-        }
-      }
-
-      function readLine() {
-        waitingForInput = true
-        inputPrefix = outputScreen.value
-        outputScreen.readOnly = false
-        outputScreen.focus()
-        outputScreen.selectionStart = outputScreen.selectionEnd = outputScreen.value.length
-
-        return new Promise(resolve => {
-          pendingInput = resolve
-        })
-      }
-
-      function getPyodide() {
-        if (!pyodidePromise) {
-          pyodidePromise = loadPyodide({
-            indexURL: 'https://cdn.jsdelivr.net/pyodide/v314.0.7/full/',
-          })
+      function stopWorker() {
+        if (worker) {
+          worker.terminate()
+          worker = null
         }
 
-        return pyodidePromise
+        waitingForInput = false
+        inputPrefix = ''
+        outputScreen.readOnly = true
       }
 
       function makeProgram(text) {
@@ -225,47 +194,63 @@
         ].join('\n')
       }
 
-      async function executeProgram(runId, programSource) {
-        if (runId !== activeRun) return
-
-        outputScreen.value = 'Loading...\n'
-        outputScreen.readOnly = true
-
-        try {
-          const pyodide = await getPyodide()
-          if (runId !== activeRun) return
-
-          outputScreen.value = ''
-          pyodide.globals.set('_emit', text => appendOutput(String(text), runId))
-          pyodide.globals.set('_read_line', readLine)
-
-          await pyodide.runPythonAsync(makeProgram(programSource))
-        } catch (error) {
-          appendOutput(String(error) + '\n', runId)
-        } finally {
-          if (runId === activeRun) {
-            waitingForInput = false
-            pendingInput = null
-            outputScreen.readOnly = true
-            outputScreen.scrollTop = outputScreen.scrollHeight
-          }
-        }
-      }
-
-      async function runProgram() {
+      function runProgram() {
         source = sourceScreen.value
-        await updateHash(source)
+        updateHash(source).catch(() => {})
 
-        cancelPendingInput()
-        const runId = ++activeRun
-        outputScreen.value = ''
+        stopWorker()
+        outputScreen.value = 'Loading...'
         setMode('run')
 
-        runQueue = runQueue
-          .then(() => executeProgram(runId, source))
-          .catch(error => appendOutput(String(error) + '\n', runId))
+        try {
+          worker = new Worker('./python-worker.mjs', { type: 'module' })
+        } catch (error) {
+          outputScreen.value = String(error) + '\n'
+          return
+        }
 
-        return runQueue
+        worker.onmessage = event => {
+          if (!worker) return
+
+          const { type, text } = event.data
+
+          if (type === 'output') {
+            outputScreen.value += text
+            outputScreen.scrollTop = outputScreen.scrollHeight
+            return
+          }
+
+          if (type === 'input-request') {
+            waitingForInput = true
+            inputPrefix = outputScreen.value
+            outputScreen.readOnly = false
+            outputScreen.focus()
+            outputScreen.selectionStart = outputScreen.selectionEnd = outputScreen.value.length
+            return
+          }
+
+          if (type === 'error') {
+            outputScreen.value += text + '\n'
+          }
+
+          if (type === 'finished' || type === 'error') {
+            waitingForInput = false
+            outputScreen.readOnly = true
+            outputScreen.scrollTop = outputScreen.scrollHeight
+            worker.terminate()
+            worker = null
+          }
+        }
+
+        worker.onerror = event => {
+          outputScreen.value += event.message + '\n'
+          stopWorker()
+        }
+
+        worker.postMessage({
+          type: 'run',
+          text: makeProgram(source),
+        })
       }
 
       sourceScreen.addEventListener('input', () => {
@@ -294,15 +279,17 @@
 
         if (event.key === 'Enter') {
           event.preventDefault()
+
           const line = outputScreen.value.slice(inputPrefix.length).replace(/[\r\n]/g, '')
+
           outputScreen.value = inputPrefix + line + '\n'
           outputScreen.scrollTop = outputScreen.scrollHeight
           outputScreen.readOnly = true
           waitingForInput = false
 
-          const resolve = pendingInput
-          pendingInput = null
-          if (resolve) resolve(line)
+          if (worker) {
+            worker.postMessage({ type: 'input-response', text: line })
+          }
         }
       })
 
@@ -312,8 +299,7 @@
           return
         }
 
-        cancelPendingInput()
-        activeRun++
+        stopWorker()
         setMode('source')
       })
 
@@ -329,7 +315,7 @@
         try {
           source = await decodeSource(fragment)
           sourceScreen.value = source
-          await runProgram()
+          runProgram()
         } catch {
           source = ''
           sourceScreen.placeholder = 'The URL fragment could not be decoded. Enter Python source here.'
